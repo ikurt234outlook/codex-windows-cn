@@ -580,14 +580,36 @@ export function useAppController(bridge: AppBridge) {
     }
   };
 
+  /// Hand over to the launcher just deployed at `installForm.root`. The Rust
+  /// command spawns it and closes this installer process.
+  const openInstalledLauncher = async () => {
+    if (!installForm) {
+      return;
+    }
+    setLaunchState("launching");
+    setLaunchMessage(null);
+    try {
+      await bridge.openInstalledLauncher(installForm.root);
+    } catch (cause) {
+      setLaunchMessage(errorMessage(cause, "打开中文助手失败"));
+    } finally {
+      setLaunchState("idle");
+    }
+  };
+
   const startUpdate = async () => {
     updateCheckGeneration.current += 1;
     const productName = updateStatus.productName ?? proxyStatus?.productName ?? "Codex";
+    // Nothing installed yet: the same download path performs a first install,
+    // so the copy must not promise an update package.
+    const installing = !proxyStatus?.currentVersion;
     setUpdateState("running");
     setUpdateEvent({
       kind: "phase",
-      title: "正在下载更新",
-      detail: `正在使用已配置的下载方式获取 ${productName} 更新包。`,
+      title: installing ? "正在安装桌面应用" : "正在下载更新",
+      detail: installing
+        ? `正在使用已配置的下载方式获取 ${productName} 官方安装包。`
+        : `正在使用已配置的下载方式获取 ${productName} 更新包。`,
       progress: null,
       version: null,
       message: null
@@ -599,7 +621,7 @@ export function useAppController(bridge: AppBridge) {
       setUpdateState("idle");
       setUpdateEvent({
         kind: "error",
-        title: "更新失败",
+        title: installing ? "安装失败" : "更新失败",
         detail: "",
         progress: null,
         version: null,
@@ -699,6 +721,7 @@ export function useAppController(bridge: AppBridge) {
     latestVersion,
     launchCodex,
     launchInstalledCodex,
+    openInstalledLauncher,
     launcherUpdateEvent,
     launcherUpdateMessage,
     launcherUpdateCheckReady,

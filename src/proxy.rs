@@ -18,10 +18,33 @@ pub enum LaunchOutcome {
         version: String,
         app_kind: crate::versions::AppKind,
     },
+    /// A different managed version holds the singleton; switching closes it.
     SwitchRequired {
         running_versions: Vec<String>,
         target_version: String,
     },
+    /// The target is already running and proxy arguments were requested.
+    /// Chromium reads proxy flags only on the first process start, so the
+    /// caller must confirm a full restart instead of focusing the window.
+    RestartRequired {
+        running_versions: Vec<String>,
+        target_version: String,
+    },
+    /// Another installation outside this managed root holds the Chromium
+    /// singleton. Its window would be focused instead of a fresh start, so the
+    /// requested proxy arguments could never apply — report it instead of
+    /// claiming the launch succeeded.
+    ExternalInstallRunning { holder: PathBuf },
+}
+
+pub struct LaunchRequest<'a> {
+    pub root: &'a Path,
+    pub use_current_junction: bool,
+    pub requested_version: Option<&'a str>,
+    pub switch_running: bool,
+    pub forward_args: &'a [String],
+    /// Chromium proxy arguments; empty when the application proxy is disabled.
+    pub proxy_args: &'a [String],
 }
 
 /// Same self-heal as the installer Launch button.
@@ -36,10 +59,10 @@ pub struct SingletonHolder {
     pub image_path: PathBuf,
 }
 
-/// Compute the userData path Codex's main process uses, mirroring the logic
-/// in `bootstrap.js`:
+/// Compute the userData path the app's main process uses:
 ///   1. `CODEX_ELECTRON_USER_DATA_PATH` env var (resolved absolute) if set,
-///   2. otherwise `%APPDATA%\Codex` (production build flavor).
+///   2. otherwise `%APPDATA%\Codex\web\Codex` for the Chromium build,
+///      falling back to `%APPDATA%\Codex` for the legacy Electron build.
 ///
 /// We don't reproduce the `agent` build-flavor branch — our launcher only
 /// runs against the production desktop install.
@@ -51,7 +74,9 @@ pub fn codex_user_data_dir() -> Option<PathBuf> {
         }
     }
     let appdata = std::env::var("APPDATA").ok()?;
-    Some(PathBuf::from(appdata).join("Codex"))
+    let base = PathBuf::from(appdata).join("Codex");
+    let chromium = base.join("web").join("Codex");
+    Some(if chromium.is_dir() { chromium } else { base })
 }
 
 /// Probe Codex's chromium ProcessSingleton. Looks for the hidden
@@ -125,35 +150,76 @@ pub fn find_singleton_holder(_user_data_dir: &Path) -> Option<SingletonHolder> {
     None
 }
 
-/// Spawn Codex.exe with forwarded args. Always spawns — Codex's own
+/// Spawn Codex.exe with forwarded args and, when the application proxy is on,
+/// the Chromium proxy arguments. Always spawns — Codex's own
 /// ProcessSingleton handles the "already running" case via pipe handoff,
-/// transferring focus to the lock-holder. Before spawning we check the
-/// singleton; if a *foreign* install holds it, we MessageBox the user so
-/// they understand why their click may surface that other install's window
-/// instead of ours.
-pub fn launch(root: &Path, use_current_junction: bool, forward_args: &[String]) -> Result<()> {
-    match launch_version(root, use_current_junction, None, false, forward_args)? {
-        LaunchOutcome::Launched { .. } => Ok(()),
-        LaunchOutcome::SwitchRequired {
-            running_versions,
-            target_version,
-        } => anyhow::bail!(
-            "version switch required from {} to {target_version}",
-            running_versions.join(", ")
-        ),
-    }
-}
-
-pub fn launch_version(
-    root: &Path,
-    use_current_junction: bool,
-    requested_version: Option<&str>,
-    switch_running: bool,
-    forward_args: &[String],
-) -> Result<LaunchOutcome> {
+/// transferring focus to the lock-holder. Before spawning we look for a
+/// *foreign* install (process table, then the singleton window); if one is
+/// running we MessageBox the user so they understand why their click may
+/// surface that other install's window instead of ours — and why the saved
+/// proxy cannot reach it.
+pub fn launch_version(request: LaunchRequest<'_>) -> Result<LaunchOutcome> {
+    let LaunchRequest {
+        root,
+        use_current_junction,
+        requested_version,
+        switch_running,
+        forward_args,
+        proxy_args,
+    } = request;
     let target =
         crate::versions::resolve_launch_target(root, use_current_junction, requested_version)?;
     let versions_root = root.join("versions");
+
+    // One Chromium profile is shared by every install, so a running foreign
+    // instance would take over our spawn. The process table is the reliable
+    // source; the singleton window is only a fallback for builds that expose it.
+    let foreign = foreign_app_process(&versions_root).or_else(|| {
+        codex_user_data_dir()
+            .and_then(|dir| find_singleton_holder(&dir))
+            .map(|holder| holder.image_path)
+            .filter(|path| !path_starts_with_ci(path, &versions_root))
+    });
+    if let Some(holder) = foreign {
+        let proxy_pending = !proxy_args.is_empty();
+        let body = format!(
+            "Codex is currently running from a different install:\n\n\
+             {}\n\n\
+             OK — Launch this install anyway. Codex's single-instance handling \
+             may transfer focus to the running install instead of starting yours fresh.{}\n\n\
+             Kill other — Terminate the other Codex (and its child processes), \
+             then launch this install cleanly.",
+            holder.display(),
+            if proxy_pending {
+                "\n\nThe saved application proxy would not be applied to that install."
+            } else {
+                ""
+            }
+        );
+        let choice = crate::dialogs::two_button_choice(
+            "Codex launcher",
+            "Another Codex installation is running",
+            &body,
+            "OK",
+            "Kill other",
+        );
+        // Esc/X dismissal = safe default (no kill). Only kill on an
+        // explicit Secondary click.
+        if choice == crate::dialogs::DialogChoice::Secondary {
+            kill_foreign_codex(
+                &SingletonHolder {
+                    pid: 0,
+                    image_path: holder.clone(),
+                },
+                &versions_root,
+            );
+        } else if proxy_pending {
+            // Focusing the foreign install cannot carry proxy arguments, so
+            // never report this click as a proxied launch.
+            return Ok(LaunchOutcome::ExternalInstallRunning { holder });
+        }
+    }
+
     let running = running_versions(&versions_root);
     let mut different: Vec<String> = running
         .iter()
@@ -167,44 +233,35 @@ pub fn launch_version(
             target_version: target.version,
         });
     }
-    let target_already_running = different.is_empty() && running.contains(&target.version);
-    if !different.is_empty() {
+    let mut target_already_running = different.is_empty() && running.contains(&target.version);
+    // Proxy flags only apply to a fresh first process, so an already-running
+    // target needs an explicit restart confirmation instead of a focus handoff.
+    // `switch_running` already carries that confirmation from the frontend.
+    if target_already_running && !proxy_args.is_empty() && !switch_running {
+        return Ok(LaunchOutcome::RestartRequired {
+            running_versions: vec![target.version.clone()],
+            target_version: target.version,
+        });
+    }
+    let restarting_for_proxy = target_already_running && !proxy_args.is_empty();
+    if !different.is_empty() || restarting_for_proxy {
         close_managed_processes(&versions_root, Duration::from_secs(5))?;
+        // The old process is gone, so the spawn below is a real first start and
+        // the proxy arguments take effect. Wait for it like any fresh launch.
+        target_already_running = false;
     }
 
-    if let Some(udd) = codex_user_data_dir() {
-        if let Some(holder) = find_singleton_holder(&udd) {
-            if !path_starts_with_ci(&holder.image_path, &versions_root) {
-                let body = format!(
-                    "Codex is currently running from a different install:\n\n\
-                     {}\n\n\
-                     OK — Launch this install anyway. Codex's single-instance handling \
-                     may transfer focus to the running install instead of starting yours fresh.\n\n\
-                     Kill other — Terminate the other Codex (and its child processes), \
-                     then launch this install cleanly.",
-                    holder.image_path.display()
-                );
-                let choice = crate::dialogs::two_button_choice(
-                    "Codex launcher",
-                    "Another Codex installation is running",
-                    &body,
-                    "OK",
-                    "Kill other",
-                );
-                // Esc/X dismissal = safe default (no kill). Only kill on an
-                // explicit Secondary click.
-                if choice == crate::dialogs::DialogChoice::Secondary {
-                    kill_foreign_codex(&holder, &versions_root);
-                }
-            }
-        }
-    }
+    let launch_args: Vec<String> = forward_args
+        .iter()
+        .chain(proxy_args.iter())
+        .cloned()
+        .collect();
 
     // Working dir = the versioned install dir so relative resource lookups
     // (Electron's default) resolve against the app root.
     let mut child = launch_command(
         &target.executable,
-        forward_args,
+        &launch_args,
         std::env::var_os("CODEX_CLI_PATH"),
     )
     .spawn()
@@ -320,6 +377,36 @@ pub fn running_versions(versions_root: &Path) -> HashSet<String> {
         .filter_map(process_image_path)
         .filter_map(|path| running_version_from_process_path(versions_root, &path))
         .collect()
+}
+
+/// Image path of a ChatGPT/Codex process running outside this managed root.
+/// Every install shares one Chromium profile, so such an instance would take
+/// over our spawn and silently discard the proxy arguments.
+pub fn foreign_app_process(versions_root: &Path) -> Option<PathBuf> {
+    find_codex_pids()
+        .into_iter()
+        .filter_map(process_image_path)
+        .find(|path| !path_starts_with_ci(path, versions_root) && is_desktop_app_process(path))
+}
+
+/// The standalone Codex CLI shares the name `codex.exe`, so a bare name match
+/// would make every launch look blocked. Only the packaged desktop app carries
+/// the Chromium/Electron runtime files next to its executable.
+fn is_desktop_app_process(image: &Path) -> bool {
+    let name = image
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if name.eq_ignore_ascii_case("ChatGPT.exe") {
+        return true;
+    }
+    let Some(dir) = image.parent() else {
+        return false;
+    };
+    ["chrome.dll", "libEGL.dll"]
+        .iter()
+        .any(|marker| dir.join(marker).is_file())
+        || dir.join("resources").join("app.asar").is_file()
 }
 
 fn running_version_from_process_path(versions_root: &Path, process_path: &Path) -> Option<String> {
@@ -608,6 +695,26 @@ mod tests {
             Some("26.707.3748.0")
         );
         assert_eq!(running_version_from_process_path(&versions, &helper), None);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn standalone_codex_cli_is_not_mistaken_for_a_running_desktop_app() {
+        let root = std::env::temp_dir().join(format!(
+            "codex-windows-cn-desktop-marker-{}",
+            std::process::id()
+        ));
+        let cli_dir = root.join("npm");
+        std::fs::create_dir_all(&cli_dir).unwrap();
+        let cli = cli_dir.join("codex.exe");
+        std::fs::write(&cli, b"cli").unwrap();
+
+        assert!(!super::is_desktop_app_process(&cli));
+
+        std::fs::write(cli_dir.join("chrome.dll"), b"runtime").unwrap();
+        assert!(super::is_desktop_app_process(&cli));
+        assert!(super::is_desktop_app_process(&cli_dir.join("ChatGPT.exe")));
 
         let _ = std::fs::remove_dir_all(root);
     }

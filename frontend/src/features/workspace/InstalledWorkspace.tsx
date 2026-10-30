@@ -15,6 +15,7 @@ import {
   LoaderCircle,
   MonitorUp,
   Play,
+  PlugZap,
   RefreshCw,
   Rocket,
   Settings2,
@@ -24,14 +25,23 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
+  AppBridge,
+  AppProxyProbe,
+  AppProxySettings,
   InstalledVersionStatus,
   LauncherUpdateEvent,
   LauncherUpdateStatus,
   UpdatePolicy,
   VersionInventory
 } from "../../bridge";
+import { defaultAppProxySettings } from "../../bridge";
 import {
+  appProxyPresets,
+  appProxySettingsEqual,
+  formatAppProxyBypass,
   launcherUpdateActionLabels,
+  matchAppProxyPreset,
+  parseAppProxyBypass,
   updatePolicyLabels,
   updateActionLabels,
   workspacePanelLabel
@@ -70,6 +80,11 @@ type PendingSwitch = {
   runningVersions: string[];
 };
 
+type PendingRestart = {
+  targetVersion: string | null;
+  runningVersions: string[];
+};
+
 type BusyAction = "launch" | "delete" | "settings" | "shortcut" | null;
 
 export function InstalledWorkspace({ controller }: { controller: ReadyAppController }) {
@@ -86,6 +101,7 @@ export function InstalledWorkspace({ controller }: { controller: ReadyAppControl
   const [actionFeedback, setActionFeedback] = useState<Feedback | null>(null);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null);
+  const [pendingRestart, setPendingRestart] = useState<PendingRestart | null>(null);
   const [pendingDelete, setPendingDelete] = useState<InstalledVersionStatus | null>(null);
   const inventoryGeneration = useRef(0);
   const inventoryPending = useRef(false);
@@ -165,14 +181,26 @@ export function InstalledWorkspace({ controller }: { controller: ReadyAppControl
         switchRunning
       });
       if (result.switchRequired) {
+        setPendingRestart(null);
         setPendingSwitch({
           targetVersion: result.version,
           runningVersions: result.runningVersions
         });
         return;
       }
+      if (result.restartRequired) {
+        setPendingSwitch(null);
+        setPendingRestart({
+          targetVersion: result.version,
+          runningVersions: result.runningVersions
+        });
+        return;
+      }
       setPendingSwitch(null);
-      setActionFeedback({ message: result.message, tone: "success" });
+      setPendingRestart(null);
+      // A blocked launch (external installation holding the singleton) must not
+      // read as success just because no confirmation is pending.
+      setActionFeedback({ message: result.message, tone: result.launched ? "success" : "error" });
       await refreshInventory();
     } catch (cause) {
       setActionFeedback({ message: errorMessage(cause, "启动失败"), tone: "error" });
@@ -361,6 +389,20 @@ export function InstalledWorkspace({ controller }: { controller: ReadyAppControl
         />
       ) : null}
 
+      {pendingRestart ? (
+        <ConfirmDialog
+          busy={busyAction === "launch"}
+          confirmLabel={busyAction === "launch" ? "正在重启" : "完全重启"}
+          description={`${pendingRestart.targetVersion ?? "当前版本"} 正在运行，代理启动参数只会在应用第一次启动时生效。确认后会先关闭 ${
+            pendingRestart.runningVersions.join("、")
+          }，再带上已保存的代理设置重新启动。`}
+          icon={<PlugZap size={20} />}
+          onCancel={() => setPendingRestart(null)}
+          onConfirm={() => void launchVersion(pendingRestart.targetVersion, true)}
+          title="需要重启应用"
+        />
+      ) : null}
+
       {pendingDelete ? (
         <ConfirmDialog
           busy={busyAction === "delete"}
@@ -448,61 +490,95 @@ function OverviewPanel({
       <div className="launch-hero">
         <div className="launch-copy">
           <span className="product-chip">{productName}</span>
-          <h2>{defaultVersion ?? "正在读取版本"}</h2>
-          <p>{updateStatus.message}</p>
+          <h2>{defaultVersion ?? "尚未安装"}</h2>
+          <p>
+            {defaultVersion
+              ? updateStatus.message
+              : "从 Microsoft Store 获取官方桌面应用，安装后可在这里启动。"}
+          </p>
         </div>
-        <button
-          className="launch-button"
-          disabled={!defaultVersion || busy}
-          onClick={onLaunch}
-          type="button"
-        >
-          {busy ? <LoaderCircle className="spin" size={20} /> : <Play size={20} fill="currentColor" />}
-          {busy ? "启动中" : `启动 ${productName}`}
-        </button>
+        {defaultVersion ? (
+          <button
+            className="launch-button"
+            disabled={busy}
+            onClick={onLaunch}
+            type="button"
+          >
+            {busy ? (
+              <LoaderCircle className="spin" size={20} />
+            ) : (
+              <Play size={20} fill="currentColor" />
+            )}
+            {busy ? "启动中" : `启动 ${productName}`}
+          </button>
+        ) : (
+          <button
+            className="launch-button"
+            disabled={busy || updateState !== "idle"}
+            onClick={startUpdate}
+            type="button"
+          >
+            {updateState === "idle" ? (
+              <Download size={20} />
+            ) : (
+              <LoaderCircle className="spin" size={20} />
+            )}
+            {updateState === "idle" ? "安装桌面应用" : "安装中"}
+          </button>
+        )}
       </div>
 
       {feedback ? <StatusMessage tone={feedback.tone}>{feedback.message}</StatusMessage> : null}
 
-      <div className="metric-strip" aria-label="安装摘要">
-        <Metric icon={<Layers3 size={17} />} label="已安装" value={`${inventory?.versions.length ?? 0} 个版本`} />
-        <Metric icon={<HardDrive size={17} />} label="占用空间" value={formatBytes(totalSize)} />
-        <Metric
-          icon={<ShieldCheck size={17} />}
-          label="保留策略"
-          value={inventory?.keepAllVersions ? "全部保留" : `最近 ${inventory?.keepVersions ?? 5} 个`}
-        />
-        <Metric
-          icon={<FolderOpen size={17} />}
-          label="安装位置"
-          title={inventory?.root}
-          value={inventory?.root || "正在读取"}
-        />
-      </div>
+      {defaultVersion ? (
+        <>
+          <div className="metric-strip" aria-label="安装摘要">
+            <Metric icon={<Layers3 size={17} />} label="已安装" value={`${inventory?.versions.length ?? 0} 个版本`} />
+            <Metric icon={<HardDrive size={17} />} label="占用空间" value={formatBytes(totalSize)} />
+            <Metric
+              icon={<ShieldCheck size={17} />}
+              label="保留策略"
+              value={inventory?.keepAllVersions ? "全部保留" : `最近 ${inventory?.keepVersions ?? 5} 个`}
+            />
+            <Metric
+              icon={<FolderOpen size={17} />}
+              label="安装位置"
+              title={inventory?.root}
+              value={inventory?.root || "正在读取"}
+            />
+          </div>
 
-      <div className="update-band">
-        <div>
-          <span className="section-label">官方更新</span>
-          <strong aria-live="polite">{checking ? "正在检查更新…" : updateStatus.title}</strong>
-          {checking ? <CheckProgress /> : null}
-        </div>
-        <div className="update-actions">
-          {!checking && updateStatus.actions.includes("updateNow") ? (
-            <button className="button primary" onClick={startUpdate} type="button">
-              <Download size={15} />
-              立即更新
-            </button>
-          ) : !checking && updateStatus.kind === "upToDate" ? (
-            <span className="verified-state"><CheckCircle2 size={16} /> 已同步</span>
+          <div className="update-band">
+            <div>
+              <span className="section-label">官方更新</span>
+              <strong aria-live="polite">{checking ? "正在检查更新…" : updateStatus.title}</strong>
+              {checking ? <CheckProgress /> : null}
+            </div>
+            <div className="update-actions">
+              {!checking && updateStatus.actions.includes("updateNow") ? (
+                <button className="button primary" onClick={startUpdate} type="button">
+                  <Download size={15} />
+                  立即更新
+                </button>
+              ) : !checking && updateStatus.kind === "upToDate" ? (
+                <span className="verified-state"><CheckCircle2 size={16} /> 已同步</span>
+              ) : null}
+              <button
+                className="button secondary"
+                disabled={checking || updateState !== "idle"}
+                onClick={() => void controller.checkUpdateNow()}
+                type="button"
+              >
+                <RefreshCw size={15} />
+                {checking ? "正在检查…" : "检查更新"}
+              </button>
+            </div>
+          </div>
+
+          {!checking && deferActions.length > 0 ? (
+            <DeferActions actions={deferActions} labels={updateActionLabels} onSelect={applyUpdateAction} />
           ) : null}
-          <button className="button secondary" disabled={checking || updateState !== "idle"} onClick={() => void controller.checkUpdateNow()} type="button">
-            <RefreshCw size={15} />{checking ? "正在检查…" : "检查更新"}
-          </button>
-        </div>
-      </div>
-
-      {!checking && deferActions.length > 0 ? (
-        <DeferActions actions={deferActions} labels={updateActionLabels} onSelect={applyUpdateAction} />
+        </>
       ) : null}
 
       {inventoryError ? <StatusMessage tone="error">{inventoryError}</StatusMessage> : null}
@@ -853,6 +929,8 @@ function SettingsPanel({
         </div>
       </section>
 
+      <AppProxySetting bridge={controller.bridge} busy={busy} />
+
       <ShortcutSetting
         busy={busy}
         description={
@@ -979,6 +1057,277 @@ function ShortcutSetting({
             创建
           </button>
         )}
+      </div>
+    </section>
+  );
+}
+
+type ProxyTestState =
+  | { kind: "idle" }
+  | { kind: "testing" }
+  | { kind: "result"; probe: AppProxyProbe };
+
+type ProxyForm = AppProxySettings & { bypassText: string };
+
+function proxyFormFrom(settings: AppProxySettings): ProxyForm {
+  return { ...settings, bypassText: formatAppProxyBypass(settings.bypassList) };
+}
+
+function proxySettingsFrom(form: ProxyForm): AppProxySettings {
+  const { bypassText, ...settings } = form;
+  return { ...settings, bypassList: parseAppProxyBypass(bypassText) };
+}
+
+function AppProxySetting({ bridge, busy }: { bridge: AppBridge; busy: boolean }) {
+  const [saved, setSaved] = useState<AppProxySettings>(defaultAppProxySettings);
+  const [form, setForm] = useState<ProxyForm>(() =>
+    proxyFormFrom(defaultAppProxySettings)
+  );
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [test, setTest] = useState<ProxyTestState>({ kind: "idle" });
+  const editRevision = useRef(0);
+  const testRevision = useRef(0);
+
+  useEffect(() => {
+    let alive = true;
+    bridge
+      .getAppProxySettings()
+      .then((result) => {
+        if (!alive) return;
+        setSaved(result.settings);
+        setForm(proxyFormFrom(result.settings));
+        setLoaded(true);
+      })
+      .catch((cause) => {
+        if (alive) {
+          setLoaded(true);
+          setFeedback({ message: errorMessage(cause, "无法读取应用代理设置"), tone: "error" });
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [bridge]);
+
+  // Editing invalidates any probe result: it describes the values that were
+  // submitted, not what the form shows now.
+  const patch = (next: Partial<ProxyForm>) => {
+    editRevision.current += 1;
+    testRevision.current += 1;
+    setForm((current) => ({ ...current, ...next }));
+    setTest({ kind: "idle" });
+    setFeedback(null);
+  };
+
+  const current = proxySettingsFrom(form);
+  const dirty = loaded && !appProxySettingsEqual(current, saved);
+
+  const runTest = async () => {
+    const submitted = current;
+    const generation = ++testRevision.current;
+    setTest({ kind: "testing" });
+    setFeedback(null);
+    try {
+      const probe = await bridge.testAppProxyConnection(submitted);
+      if (testRevision.current !== generation) return;
+      setTest({ kind: "result", probe });
+    } catch (cause) {
+      if (testRevision.current !== generation) return;
+      setTest({
+        kind: "result",
+        probe: { outcome: "connectionFailed", message: errorMessage(cause, "检测代理连接失败") }
+      });
+    }
+  };
+
+  const save = async () => {
+    const submittedRevision = editRevision.current;
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const result = await bridge.saveAppProxySettings(current);
+      if (editRevision.current === submittedRevision) {
+        setSaved(result.settings);
+        setForm(proxyFormFrom(result.settings));
+      }
+      setFeedback({ message: result.message, tone: "success" });
+    } catch (cause) {
+      setFeedback({ message: errorMessage(cause, "保存应用代理设置失败"), tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const preset = matchAppProxyPreset(current);
+  const testFeedback: Feedback | null =
+    test.kind === "result"
+      ? {
+          message: test.probe.message,
+          tone: test.probe.outcome === "success" ? "success" : "error"
+        }
+      : null;
+
+  return (
+    <section className="settings-section proxy-setting" aria-label="应用代理">
+      <div className="proxy-heading">
+        <div className="settings-copy">
+          <strong>应用代理</strong>
+          <span>
+            只影响中文助手启动的 ChatGPT / Codex 桌面应用，不改 Windows 系统代理，也不影响终端
+            Code CLI。
+          </span>
+        </div>
+        <label className="proxy-switch">
+          <input
+            aria-label="启用应用代理"
+            checked={form.enabled}
+            disabled={!loaded || busy || saving}
+            onChange={(event) => patch({ enabled: event.target.checked })}
+            type="checkbox"
+          />
+          <span>{form.enabled ? "已启用" : "已关闭"}</span>
+        </label>
+      </div>
+
+      <div className="proxy-fields">
+        <div className="segmented" aria-label="代理协议" role="group">
+          <button
+            aria-pressed={form.type === "http"}
+            disabled={!loaded || saving}
+            onClick={() => {
+              if (form.type === "http") return;
+              patch({ type: "http" });
+            }}
+            type="button"
+          >
+            HTTP / mixed
+          </button>
+          <button
+            aria-pressed={form.type === "socks5"}
+            disabled={!loaded || saving}
+            onClick={() => {
+              if (form.type === "socks5") return;
+              patch({ type: "socks5" });
+            }}
+            type="button"
+          >
+            SOCKS5
+          </button>
+        </div>
+
+        <label className="proxy-field">
+          <span>地址</span>
+          <input
+            aria-label="代理地址"
+            disabled={!loaded || saving}
+            onChange={(event) => patch({ host: event.target.value })}
+            spellCheck={false}
+            type="text"
+            value={form.host}
+          />
+        </label>
+
+        <label className="proxy-field">
+          <span>端口</span>
+          <input
+            aria-label="代理端口"
+            disabled={!loaded || saving}
+            max={65535}
+            min={1}
+            onChange={(event) => patch({ port: Number(event.target.value) || 0 })}
+            type="number"
+            value={form.port || ""}
+          />
+        </label>
+      </div>
+
+      <div className="proxy-presets" aria-label="常见客户端预设" role="group">
+        {appProxyPresets.map((item) => (
+          <button
+            aria-pressed={preset?.id === item.id}
+            disabled={!loaded || saving}
+            key={item.id}
+            onClick={() =>
+              patch({ type: item.type, host: item.host, port: item.port })
+            }
+            type="button"
+          >
+            {item.label}
+            <small>
+              {item.host}:{item.port}
+            </small>
+          </button>
+        ))}
+      </div>
+
+      <div className="installer-advanced proxy-advanced">
+        <button
+          aria-controls="app-proxy-advanced"
+          aria-expanded={advancedOpen}
+          className="advanced-toggle"
+          onClick={() => setAdvancedOpen((open) => !open)}
+          type="button"
+        >
+          高级选项
+          <ChevronDown aria-hidden="true" size={13} />
+        </button>
+        {advancedOpen ? (
+          <div className="proxy-advanced-body" id="app-proxy-advanced">
+            <label className="proxy-check">
+              <input
+                checked={form.disableQuic}
+                disabled={!loaded || saving}
+                onChange={(event) => patch({ disableQuic: event.target.checked })}
+                type="checkbox"
+              />
+              关闭 QUIC，避免部分代理不转发 UDP
+            </label>
+            <label className="proxy-field proxy-bypass">
+              <span>直连列表</span>
+              <textarea
+                aria-label="代理直连列表"
+                disabled={!loaded || saving}
+                onChange={(event) => patch({ bypassText: event.target.value })}
+                rows={5}
+                spellCheck={false}
+                value={form.bypassText}
+              />
+            </label>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="strategy-footer proxy-footer">
+        {feedback ? <StatusMessage tone={feedback.tone}>{feedback.message}</StatusMessage> : null}
+        {!feedback && testFeedback ? (
+          <StatusMessage tone={testFeedback.tone}>{testFeedback.message}</StatusMessage>
+        ) : null}
+        <button
+          className="button secondary"
+          disabled={!loaded || busy || saving || test.kind === "testing"}
+          onClick={() => void runTest()}
+          type="button"
+        >
+          {test.kind === "testing" ? (
+            <LoaderCircle className="spin" size={15} />
+          ) : (
+            <PlugZap size={15} />
+          )}
+          {test.kind === "testing" ? "正在检测" : "测试连接"}
+        </button>
+        <button
+          aria-label="保存应用代理设置"
+          className="button primary save-settings"
+          disabled={!loaded || busy || saving || !dirty}
+          onClick={() => void save()}
+          type="button"
+        >
+          {saving ? <LoaderCircle className="spin" size={15} /> : <CheckCircle2 size={15} />}
+          {saving ? "保存中" : dirty ? "保存代理设置" : "已保存"}
+        </button>
       </div>
     </section>
   );

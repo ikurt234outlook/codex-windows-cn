@@ -1,4 +1,5 @@
 import type {
+  AppProxySettings,
   Fetcher,
   InstallEvent,
   InstallModeDefaults,
@@ -10,11 +11,13 @@ import type {
 } from "./bridge";
 import type { InstallForm, InstallerStep, WorkspacePanel } from "./appTypes";
 
-export function initialInstallEvent(fetcher: Fetcher): InstallEvent {
+/// The wizard deploys the assistant only; the desktop app is installed later
+/// from the workspace, so nothing here waits on a download.
+export function initialInstallEvent(_fetcher: Fetcher): InstallEvent {
   return {
     kind: "phase",
-    title: initialInstallTitle(fetcher),
-    detail: initialInstallDetail(fetcher),
+    title: "正在部署中文助手",
+    detail: "正在写入启动器和配置。",
     progress: null,
     version: null,
     message: null
@@ -24,14 +27,6 @@ export function initialInstallEvent(fetcher: Fetcher): InstallEvent {
 export function mergeInstallEvent(current: InstallEvent | null, event: InstallEvent): InstallEvent {
   if (event.kind !== "progress" || event.detail.trim() !== "" || !current) {
     return event;
-  }
-
-  if (current.title === "正在连接 Microsoft Store" && event.progress !== null) {
-    return {
-      ...event,
-      title: "正在下载",
-      detail: "正在下载官方桌面应用安装包。"
-    };
   }
 
   return {
@@ -74,26 +69,6 @@ export function toPercent(progress: number | null | undefined) {
     return null;
   }
   return Math.round(progress * 100);
-}
-
-function initialInstallTitle(fetcher: Fetcher) {
-  if (fetcher === "winget") {
-    return "正在启动 winget";
-  }
-  if (fetcher === "localFile") {
-    return "正在读取本地 MSIX";
-  }
-  return "正在连接 Microsoft Store";
-}
-
-function initialInstallDetail(fetcher: Fetcher) {
-  if (fetcher === "winget") {
-    return "正在调用 Windows 包管理器下载官方桌面应用。";
-  }
-  if (fetcher === "localFile") {
-    return "正在准备从本地安装包安装官方桌面应用。";
-  }
-  return "正在解析官方桌面应用下载地址，首次安装可能需要几分钟。";
 }
 
 export const installerStepLabel: Record<InstallerStep, string> = {
@@ -158,3 +133,57 @@ export const launcherUpdateActionLabels: Record<
   snoozeSevenDays: "7 天后提醒",
   never: "关闭提醒"
 };
+
+export type AppProxyPreset = {
+  id: string;
+  label: string;
+  type: AppProxySettings["type"];
+  host: string;
+  port: number;
+};
+
+/// Local listener ports only — never node servers, subscriptions, or remote 443.
+export const appProxyPresets: AppProxyPreset[] = [
+  { id: "v2rayn", label: "V2RayN", type: "http", host: "127.0.0.1", port: 10808 },
+  { id: "clash-verge", label: "Clash Verge Rev", type: "http", host: "127.0.0.1", port: 7897 },
+  { id: "clash", label: "Clash / Mihomo", type: "http", host: "127.0.0.1", port: 7890 },
+  { id: "socks5", label: "通用 SOCKS5", type: "socks5", host: "127.0.0.1", port: 1080 }
+];
+
+/// The editor accepts one entry per line; Chromium itself joins with `;`.
+export function parseAppProxyBypass(text: string) {
+  return text
+    .split(/[\n;]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function formatAppProxyBypass(bypassList: string[]) {
+  return bypassList.join("\n");
+}
+
+export function appProxySettingsEqual(
+  left: AppProxySettings,
+  right: AppProxySettings
+) {
+  return (
+    left.enabled === right.enabled &&
+    left.type === right.type &&
+    left.host === right.host &&
+    left.port === right.port &&
+    left.disableQuic === right.disableQuic &&
+    left.bypassList.length === right.bypassList.length &&
+    left.bypassList.every((entry, index) => entry === right.bypassList[index])
+  );
+}
+
+export function matchAppProxyPreset(settings: AppProxySettings) {
+  return (
+    appProxyPresets.find(
+      (preset) =>
+        preset.type === settings.type &&
+        preset.host === settings.host &&
+        preset.port === settings.port
+    ) ?? null
+  );
+}

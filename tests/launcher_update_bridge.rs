@@ -191,5 +191,6 @@ fn test_config() -> Config {
         known_latest_launcher: None,
         skipped_launcher_version: None,
         launcher_suppress_until_unix: None,
+        app_proxy: Default::default(),
     }
 }

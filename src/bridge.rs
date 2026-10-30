@@ -1,3 +1,4 @@
+use crate::app_proxy::{AppProxyProbe, AppProxySettings};
 use crate::config::{Config, InstallMode, UpdatePolicy};
 use crate::installer::{self, InstallMsg, InstallOptions};
 use crate::launcher_update::LauncherUpdateMsg;
@@ -130,6 +131,9 @@ pub struct ProxyLaunchStatus {
 pub struct ProxyLaunchResult {
     pub launched: bool,
     pub switch_required: bool,
+    /// The target is already running and the saved proxy settings need a full
+    /// restart before their Chromium arguments can apply.
+    pub restart_required: bool,
     pub version: Option<String>,
     pub product_name: Option<String>,
     pub running_versions: Vec<String>,
@@ -396,6 +400,19 @@ pub fn app_status() -> AppStatus {
             MainPath::Uninstall,
             MainPath::LauncherSelfUpdate,
         ],
+    }
+}
+
+/// The workspace has a launcher but no ChatGPT version yet.
+pub fn update_status_for_missing_app() -> UpdateStatus {
+    UpdateStatus {
+        kind: UpdateStatusKind::Skipped,
+        title: "尚未安装 ChatGPT".into(),
+        message: "安装官方桌面应用后即可启动和检查更新。".into(),
+        current_version: None,
+        latest_version: None,
+        product_name: None,
+        actions: Vec::new(),
     }
 }
 
@@ -696,6 +713,131 @@ pub fn launcher_update_event_from_msg(msg: LauncherUpdateMsg) -> LauncherUpdateE
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppProxySettingsRequest {
+    pub enabled: bool,
+    #[serde(rename = "type")]
+    pub kind: crate::app_proxy::AppProxyType,
+    pub host: String,
+    pub port: u32,
+    pub disable_quic: bool,
+    pub bypass_list: Vec<String>,
+}
+
+impl AppProxySettingsRequest {
+    pub fn to_settings(&self) -> Result<AppProxySettings, String> {
+        if self.port == 0 || self.port > u32::from(u16::MAX) {
+            return Err("本地端口必须在 1 到 65535 之间".into());
+        }
+        let settings = AppProxySettings {
+            enabled: self.enabled,
+            kind: self.kind,
+            host: self.host.clone(),
+            port: self.port as u16,
+            disable_quic: self.disable_quic,
+            bypass_list: self.bypass_list.clone(),
+        }
+        .normalized();
+        settings.validate()?;
+        Ok(settings)
+    }
+}
+
+/// IPC view of the saved settings. The on-disk config keeps the ADR's
+/// snake_case (`disable_quic`, `bypass_list`); the frontend reads camelCase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppProxySettingsView {
+    pub enabled: bool,
+    #[serde(rename = "type")]
+    pub kind: crate::app_proxy::AppProxyType,
+    pub host: String,
+    pub port: u16,
+    pub disable_quic: bool,
+    pub bypass_list: Vec<String>,
+}
+
+impl From<AppProxySettings> for AppProxySettingsView {
+    fn from(settings: AppProxySettings) -> Self {
+        Self {
+            enabled: settings.enabled,
+            kind: settings.kind,
+            host: settings.host,
+            port: settings.port,
+            disable_quic: settings.disable_quic,
+            bypass_list: settings.bypass_list,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppProxyActionResult {
+    pub applied: bool,
+    pub message: String,
+    pub settings: AppProxySettingsView,
+}
+
+pub fn app_proxy_settings_from_config(cfg: &Config) -> AppProxySettings {
+    cfg.app_proxy.clone().normalized()
+}
+
+pub fn probe_app_proxy(request: &AppProxySettingsRequest) -> Result<AppProxyProbe, String> {
+    let settings = request.to_settings()?;
+    Ok(crate::app_proxy::probe(&settings))
+}
+
+/// Validate and persist the request, then report the saved value. Invalid
+/// settings never reach disk.
+pub fn save_app_proxy_settings(
+    root: &Path,
+    cfg: &mut Config,
+    request: &AppProxySettingsRequest,
+) -> Result<AppProxyActionResult, String> {
+    let settings = request.to_settings()?;
+    cfg.app_proxy = settings.clone();
+    cfg.save_runtime(root)
+        .map_err(|cause| format!("保存代理设置失败：{cause:#}"))?;
+    Ok(AppProxyActionResult {
+        applied: true,
+        message: if settings.enabled {
+            "代理设置已保存，下次启动应用时生效".into()
+        } else {
+            "已关闭应用代理".into()
+        },
+        settings: settings.into(),
+    })
+}
+
+/// Pre-launch gate shared by every entry point. It must stay the first step of
+/// [`launch_managed_app`], before `proxy::launch_version` closes anything, so an
+/// unreachable proxy never touches a running app.
+pub fn launch_arguments_for(settings: &AppProxySettings) -> Result<Vec<String>, String> {
+    crate::app_proxy::ensure_reachable(settings)
+        .map_err(|cause| format!("未能启动应用：{cause}"))?;
+    Ok(settings.chromium_arguments())
+}
+
+pub fn launch_managed_app(
+    root: &Path,
+    use_current_junction: bool,
+    settings: &AppProxySettings,
+    requested_version: Option<&str>,
+    switch_running: bool,
+) -> Result<proxy::LaunchOutcome, String> {
+    let proxy_args = launch_arguments_for(settings)?;
+    proxy::launch_version(proxy::LaunchRequest {
+        root,
+        use_current_junction,
+        requested_version,
+        switch_running,
+        forward_args: &[],
+        proxy_args: &proxy_args,
+    })
+    .map_err(|cause| format!("启动应用失败：{cause:#}"))
+}
+
 pub fn proxy_launch_status(root: &Path, cfg: &Config) -> ProxyLaunchStatus {
     match version_inventory(root, cfg) {
         Ok(inventory) if !inventory.versions.is_empty() => {
@@ -711,16 +853,26 @@ pub fn proxy_launch_status(root: &Path, cfg: &Config) -> ProxyLaunchStatus {
                 message: format!("可以启动 {}", inventory.product_name),
             }
         }
-        _ => ProxyLaunchStatus {
-            managed_install: true,
-            current_version: Some(cfg.current_version.clone()),
-            known_latest: cfg.known_latest.clone(),
-            can_launch: false,
-            codex_exe: None,
-            product_name: "Codex".into(),
-            running_versions: Vec::new(),
-            message: "未找到可启动的 Codex 或 ChatGPT".into(),
-        },
+        _ => {
+            // A recorded version with no usable files is a broken install, not a
+            // fresh one; only an empty version means nothing has been installed.
+            let current_version =
+                (!cfg.current_version.trim().is_empty()).then(|| cfg.current_version.clone());
+            ProxyLaunchStatus {
+                managed_install: true,
+                current_version: current_version.clone(),
+                known_latest: cfg.known_latest.clone(),
+                can_launch: false,
+                codex_exe: None,
+                product_name: "Codex".into(),
+                running_versions: Vec::new(),
+                message: if current_version.is_some() {
+                    "未找到可启动的 Codex 或 ChatGPT".into()
+                } else {
+                    "尚未安装 ChatGPT 桌面应用".into()
+                },
+            }
+        }
     }
 }
 
@@ -802,6 +954,7 @@ pub fn launch_result_from_outcome(outcome: proxy::LaunchOutcome) -> ProxyLaunchR
         proxy::LaunchOutcome::Launched { version, app_kind } => ProxyLaunchResult {
             launched: true,
             switch_required: false,
+            restart_required: false,
             version: Some(version.clone()),
             product_name: Some(app_kind.display_name().to_string()),
             running_versions: Vec::new(),
@@ -813,10 +966,37 @@ pub fn launch_result_from_outcome(outcome: proxy::LaunchOutcome) -> ProxyLaunchR
         } => ProxyLaunchResult {
             launched: false,
             switch_required: true,
+            restart_required: false,
             version: Some(target_version.clone()),
             product_name: None,
             running_versions,
             message: format!("需要关闭当前版本后切换到 {target_version}"),
+        },
+        proxy::LaunchOutcome::RestartRequired {
+            running_versions,
+            target_version,
+        } => ProxyLaunchResult {
+            launched: false,
+            switch_required: false,
+            restart_required: true,
+            version: Some(target_version.clone()),
+            product_name: None,
+            running_versions,
+            message: format!(
+                "代理启动参数只会在应用第一次启动时生效。需要完全重启 {target_version} 后才能应用已保存的代理设置。"
+            ),
+        },
+        proxy::LaunchOutcome::ExternalInstallRunning { holder } => ProxyLaunchResult {
+            launched: false,
+            switch_required: false,
+            restart_required: false,
+            version: None,
+            product_name: None,
+            running_versions: Vec::new(),
+            message: format!(
+                "另一个安装位置的 ChatGPT/Codex 正在运行：{}。代理参数只在进程首次启动时生效，请先完全退出它（包括托盘图标），再重新启动。",
+                holder.display()
+            ),
         },
     }
 }
@@ -878,6 +1058,14 @@ pub fn install_event_from_msg(msg: InstallMsg) -> InstallEvent {
             title: phase_title(&phase).into(),
             detail: phase_detail(&detail),
             progress,
+            version: None,
+            message: None,
+        },
+        InstallMsg::Done { version } if version.is_empty() => InstallEvent {
+            kind: InstallEventKind::Done,
+            title: "安装完成".into(),
+            detail: "中文助手已就绪，可在工作台安装 ChatGPT 桌面应用。".into(),
+            progress: Some(1.0),
             version: None,
             message: None,
         },

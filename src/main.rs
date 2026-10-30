@@ -1,13 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use codex_windows_cn::{
+    app_proxy::AppProxyProbe,
     bridge::{
-        self, AppStatus, BridgeInstallMode, DesktopShortcutActionResult, InstallEvent,
-        InstallRequest, InstallStart, InstallerDefaults, LaunchInstalledRequest, LaunchRequest,
-        LauncherUpdateAction, LauncherUpdateActionResult, LauncherUpdateStart,
-        LauncherUpdateStatus, ProxyLaunchResult, ProxyLaunchStatus, UninstallConfirmation,
-        UninstallEvent, UninstallStart, UninstallStatus, UpdateAction, UpdateActionResult,
-        UpdateStart, UpdateStatus, VersionActionResult, VersionInventory, VersionSettingsRequest,
+        self, AppProxyActionResult, AppProxySettingsRequest, AppStatus, BridgeInstallMode,
+        DesktopShortcutActionResult, InstallEvent, InstallRequest, InstallStart, InstallerDefaults,
+        LaunchInstalledRequest, LaunchRequest, LauncherUpdateAction, LauncherUpdateActionResult,
+        LauncherUpdateStart, LauncherUpdateStatus, ProxyLaunchResult, ProxyLaunchStatus,
+        UninstallConfirmation, UninstallEvent, UninstallStart, UninstallStatus, UpdateAction,
+        UpdateActionResult, UpdateStart, UpdateStatus, VersionActionResult, VersionInventory,
+        VersionSettingsRequest,
     },
     config::{Config, InstallMode},
     dialogs, elevate, installer, launcher_update, mode, proxy, uninstall, updater, versions,
@@ -216,20 +218,48 @@ fn proxy_launch_status() -> Result<ProxyLaunchStatus, String> {
 }
 
 #[tauri::command]
+fn get_app_proxy_settings() -> Result<AppProxyActionResult, String> {
+    let (_, cfg) = proxy_context()?;
+    Ok(AppProxyActionResult {
+        applied: true,
+        message: String::new(),
+        settings: bridge::app_proxy_settings_from_config(&cfg).into(),
+    })
+}
+
+#[tauri::command]
+fn save_app_proxy_settings(
+    request: AppProxySettingsRequest,
+) -> Result<AppProxyActionResult, String> {
+    let _guard = lock_runtime_config()?;
+    let (root, mut cfg) = proxy_context()?;
+    bridge::save_app_proxy_settings(&root, &mut cfg, &request)
+}
+
+/// Probes the submitted form values only. Nothing is persisted or launched.
+#[tauri::command]
+async fn test_app_proxy_connection(
+    request: AppProxySettingsRequest,
+) -> Result<AppProxyProbe, String> {
+    tauri::async_runtime::spawn_blocking(move || bridge::probe_app_proxy(&request))
+        .await
+        .map_err(|cause| format!("检测代理连接任务失败：{cause}"))?
+}
+
+#[tauri::command]
 fn launch_codex(request: Option<LaunchRequest>) -> Result<ProxyLaunchResult, String> {
     let (root, cfg) = proxy_context()?;
     let request = request.unwrap_or(LaunchRequest {
         version: None,
         switch_running: false,
     });
-    let outcome = proxy::launch_version(
+    let outcome = bridge::launch_managed_app(
         &root,
         cfg.use_current_junction,
+        &bridge::app_proxy_settings_from_config(&cfg),
         request.version.as_deref(),
         request.switch_running,
-        &[],
-    )
-    .map_err(|cause| format!("启动应用失败：{cause:#}"))?;
+    )?;
     Ok(bridge::launch_result_from_outcome(outcome))
 }
 
@@ -240,15 +270,38 @@ fn launch_installed_codex(request: LaunchInstalledRequest) -> Result<ProxyLaunch
         return Err("请选择安装位置".into());
     }
 
-    let outcome = proxy::launch_version(
-        std::path::Path::new(root),
+    // Post-install launch runs before the install-root config is guaranteed to
+    // be readable, so a missing config keeps the previous no-proxy behavior.
+    let install_root = std::path::Path::new(root);
+    let settings = Config::load_runtime(install_root)
+        .map(|cfg| bridge::app_proxy_settings_from_config(&cfg))
+        .unwrap_or_default();
+    let outcome = bridge::launch_managed_app(
+        install_root,
         request.use_current_junction,
+        &settings,
         None,
         false,
-        &[],
-    )
-    .map_err(|cause| format!("启动应用失败：{cause:#}"))?;
+    )?;
     Ok(bridge::launch_result_from_outcome(outcome))
+}
+
+/// Hand the session over to the freshly deployed launcher and close this
+/// process, so the installer never lingers as a second copy of the assistant.
+#[tauri::command]
+fn open_installed_launcher(app: tauri::AppHandle, root: String) -> Result<(), String> {
+    let root = root.trim();
+    if root.is_empty() {
+        return Err("请选择安装位置".into());
+    }
+    let launcher = std::path::Path::new(root).join("codex-launcher.exe");
+    if !launcher.is_file() {
+        return Err(format!("未找到已安装的中文助手：{}", launcher.display()));
+    }
+    launcher_update::spawn_restart(&launcher)
+        .map_err(|cause| format!("打开中文助手失败：{cause:#}"))?;
+    app.exit(0);
+    Ok(())
 }
 
 #[tauri::command]
@@ -425,6 +478,11 @@ async fn check_update_status(manual: Option<bool>) -> Result<UpdateStatus, Strin
 fn check_update_status_blocking(manual: bool) -> Result<UpdateStatus, String> {
     let _guard = lock_runtime_config()?;
     let (root, mut cfg) = proxy_context()?;
+    // Nothing installed yet: the workspace offers an install action instead of
+    // an update decision, which would otherwise read "current version ".
+    if cfg.current_version.trim().is_empty() {
+        return Ok(bridge::update_status_for_missing_app());
+    }
     let product_name = versions::scan_installed(&root)
         .ok()
         .and_then(|installed| {
@@ -1060,12 +1118,25 @@ fn run_cli_helper() -> Option<i32> {
         }
         CliHelperAction::LaunchLatest => {
             let result = proxy_context().and_then(|(root, cfg)| {
-                proxy::launch_version(&root, cfg.use_current_junction, None, false, &[])
-                    .map_err(|cause| format!("启动应用失败：{cause:#}"))
+                bridge::launch_managed_app(
+                    &root,
+                    cfg.use_current_junction,
+                    &bridge::app_proxy_settings_from_config(&cfg),
+                    None,
+                    false,
+                )
             });
             match result {
                 Ok(proxy::LaunchOutcome::Launched { .. }) => Some(0),
-                Ok(proxy::LaunchOutcome::SwitchRequired { .. }) => None,
+                Ok(proxy::LaunchOutcome::SwitchRequired { .. })
+                | Ok(proxy::LaunchOutcome::RestartRequired { .. }) => None,
+                Ok(proxy::LaunchOutcome::ExternalInstallRunning { holder }) => {
+                    dialogs::error(&format!(
+                        "另一个安装位置的 Codex 正在运行：{}\n\n它不会应用已保存的代理设置。请先关闭它，再重新打开桌面快捷方式。",
+                        holder.display()
+                    ));
+                    Some(1)
+                }
                 Err(message) => {
                     dialogs::error(&format!(
                         "无法通过桌面快捷方式启动 ChatGPT：{message}\n\n将打开中文助手，你可以在概览页重试。"
@@ -1116,8 +1187,12 @@ fn main() {
             cancel_install,
             install_status,
             proxy_launch_status,
+            get_app_proxy_settings,
+            save_app_proxy_settings,
+            test_app_proxy_connection,
             launch_codex,
             launch_installed_codex,
+            open_installed_launcher,
             get_version_inventory,
             save_version_settings,
             set_desktop_shortcut,

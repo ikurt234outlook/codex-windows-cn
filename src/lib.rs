@@ -1,3 +1,4 @@
+pub mod app_proxy;
 pub mod bridge;
 pub mod cleanup;
 pub mod codex_exe;

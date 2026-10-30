@@ -81,10 +81,41 @@ export type ProxyLaunchStatus = {
 export type ProxyLaunchResult = {
   launched: boolean;
   switchRequired: boolean;
+  restartRequired: boolean;
   version: string | null;
   productName: string | null;
   runningVersions: string[];
   message: string;
+};
+
+export type AppProxyType = "http" | "socks5";
+
+export type AppProxySettings = {
+  enabled: boolean;
+  type: AppProxyType;
+  host: string;
+  port: number;
+  disableQuic: boolean;
+  bypassList: string[];
+};
+
+export type AppProxyProbeOutcome =
+  | "success"
+  | "invalidConfiguration"
+  | "resolutionFailed"
+  | "connectionRefused"
+  | "timeout"
+  | "connectionFailed";
+
+export type AppProxyProbe = {
+  outcome: AppProxyProbeOutcome;
+  message: string;
+};
+
+export type AppProxyActionResult = {
+  applied: boolean;
+  message: string;
+  settings: AppProxySettings;
 };
 
 export type LaunchRequest = {
@@ -250,8 +281,12 @@ export type AppBridge = {
   getInstallStatus: () => Promise<InstallEvent | null>;
   onInstallEvent: (handler: (event: InstallEvent) => void) => () => void;
   getProxyLaunchStatus: () => Promise<ProxyLaunchStatus>;
+  getAppProxySettings: () => Promise<AppProxyActionResult>;
+  saveAppProxySettings: (request: AppProxySettings) => Promise<AppProxyActionResult>;
+  testAppProxyConnection: (request: AppProxySettings) => Promise<AppProxyProbe>;
   launchCodex: (request?: LaunchRequest) => Promise<ProxyLaunchResult>;
   launchInstalledCodex: (request: LaunchInstalledRequest) => Promise<ProxyLaunchResult>;
+  openInstalledLauncher: (root: string) => Promise<void>;
   getVersionInventory: () => Promise<VersionInventory>;
   deleteInstalledVersion: (version: string) => Promise<VersionActionResult>;
   saveVersionSettings: (request: VersionSettingsRequest) => Promise<VersionActionResult>;
@@ -337,6 +372,38 @@ const fallbackInstallerDefaults: InstallerDefaults = {
   fetchers: ["direct", "winget", "localFile"]
 };
 
+export const defaultAppProxySettings: AppProxySettings = {
+  enabled: false,
+  type: "http",
+  host: "127.0.0.1",
+  port: 10808,
+  disableQuic: true,
+  bypassList: [
+    "<-loopback>",
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "10.*",
+    "172.16.*",
+    "172.17.*",
+    "172.18.*",
+    "172.19.*",
+    "172.20.*",
+    "172.21.*",
+    "172.22.*",
+    "172.23.*",
+    "172.24.*",
+    "172.25.*",
+    "172.26.*",
+    "172.27.*",
+    "172.28.*",
+    "172.29.*",
+    "172.30.*",
+    "172.31.*",
+    "192.168.*"
+  ]
+};
+
 export const fallbackProxyLaunchStatus: ProxyLaunchStatus = {
   managedInstall: false,
   currentVersion: null,
@@ -365,6 +432,7 @@ export const fallbackVersionInventory: VersionInventory = {
 
 let fallbackDesktopShortcutExists = false;
 let fallbackAssistantDesktopShortcutExists = false;
+let savedFallbackAppProxySettings: AppProxySettings = defaultAppProxySettings;
 
 export const fallbackUpdateStatus: UpdateStatus = {
   kind: "skipped",
@@ -461,12 +529,48 @@ export const tauriBridge: AppBridge = {
 
     return invoke<ProxyLaunchStatus>("proxy_launch_status");
   },
+  getAppProxySettings: () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      return Promise.resolve({
+        applied: true,
+        message: "",
+        settings: savedFallbackAppProxySettings
+      });
+    }
+
+    return invoke<AppProxyActionResult>("get_app_proxy_settings");
+  },
+  saveAppProxySettings: (request) => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      savedFallbackAppProxySettings = request;
+      return Promise.resolve({
+        applied: true,
+        message: request.enabled
+          ? "代理设置已保存，下次启动应用时生效"
+          : "已关闭应用代理",
+        settings: request
+      });
+    }
+
+    return invoke<AppProxyActionResult>("save_app_proxy_settings", { request });
+  },
+  testAppProxyConnection: (request) => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      return Promise.resolve({
+        outcome: "success" as const,
+        message: "已连接到本机代理端口"
+      });
+    }
+
+    return invoke<AppProxyProbe>("test_app_proxy_connection", { request });
+  },
   launchCodex: (request) => {
     if (!("__TAURI_INTERNALS__" in window)) {
       const version = request?.version ?? fallbackVersionInventory.defaultVersion ?? "26.707.3748.0";
       return Promise.resolve({
         launched: true,
         switchRequired: false,
+        restartRequired: false,
         version,
         productName: "ChatGPT",
         runningVersions: [],
@@ -481,6 +585,7 @@ export const tauriBridge: AppBridge = {
       return Promise.resolve({
         launched: true,
         switchRequired: false,
+        restartRequired: false,
         version: null,
         productName: "Codex",
         runningVersions: [],
@@ -489,6 +594,13 @@ export const tauriBridge: AppBridge = {
     }
 
     return invoke<ProxyLaunchResult>("launch_installed_codex", { request });
+  },
+  openInstalledLauncher: (root) => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      return Promise.resolve();
+    }
+
+    return invoke<void>("open_installed_launcher", { root });
   },
   getVersionInventory: () => {
     if (!("__TAURI_INTERNALS__" in window)) {

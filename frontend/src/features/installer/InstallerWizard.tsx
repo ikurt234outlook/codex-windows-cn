@@ -65,7 +65,9 @@ export function InstallerWizard({ controller }: { controller: ReadyAppController
           <div className="welcome-copy">
             <p className="eyebrow">{status.v1Boundary}</p>
             <h2>欢迎使用 Codex Windows 中文助手</h2>
-            <p className="muted">下载并安装官方 Microsoft Store 桌面应用，无需打开 Store。</p>
+            <p className="muted">
+              先把这个中文助手装到本机；ChatGPT 桌面应用随后在工作台里一键安装。
+            </p>
           </div>
         </section>
       ) : null}
@@ -213,8 +215,14 @@ export function InstallerWizard({ controller }: { controller: ReadyAppController
 
       {installerStep === "done" ? (
         <section className="screen center-screen">
-          <p className="success-text">{installedProductName} 已安装</p>
-          {installEvent?.version ? <p className="muted">版本 {installEvent.version}</p> : null}
+          <p className="success-text">
+            {installEvent?.version ? `${installedProductName} 已安装` : "中文助手已安装"}
+          </p>
+          {installEvent?.version ? (
+            <p className="muted">版本 {installEvent.version}</p>
+          ) : installEvent?.detail ? (
+            <p className="muted">{installEvent.detail}</p>
+          ) : null}
           <code>{installForm.root}</code>
           {launchMessage ? <span className="inline-status">{launchMessage}</span> : null}
         </section>
@@ -250,12 +258,14 @@ function InstallerFooter({ controller }: { controller: ReadyAppController }) {
   const {
     cancelInstall,
     installCancellable,
+    installEvent,
     installForm,
     installerStep,
     installState,
     installedProductName,
     launchInstalledCodex,
     launchState,
+    openInstalledLauncher,
     setInstallerStep,
     startInstall
   } = controller;
@@ -340,16 +350,25 @@ function InstallerFooter({ controller }: { controller: ReadyAppController }) {
   }
 
   if (installerStep === "done") {
+    // A retained ChatGPT version means this run only redeployed the launcher,
+    // so the useful next step is starting it rather than opening the assistant.
+    const installedApp = Boolean(installEvent?.version);
     return (
       <>
         <span />
         <button
           className="button primary"
           disabled={launchState !== "idle"}
-          onClick={launchInstalledCodex}
+          onClick={installedApp ? launchInstalledCodex : openInstalledLauncher}
           type="button"
         >
-          {launchState === "idle" ? `启动 ${installedProductName}` : "启动中"}
+          {installedApp
+            ? launchState === "idle"
+              ? `启动 ${installedProductName}`
+              : "启动中"
+            : launchState === "idle"
+              ? "打开中文助手"
+              : "正在打开"}
         </button>
       </>
     );

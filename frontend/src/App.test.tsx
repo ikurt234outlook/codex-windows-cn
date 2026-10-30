@@ -2,8 +2,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App";
 import { LoadingSplash } from "./components/Shell";
+import { defaultAppProxySettings } from "./bridge";
 import type {
   AppBridge,
+  AppProxyProbe,
+  AppProxySettings,
   AppStatus,
   InstallEvent,
   InstallerDefaults,
@@ -86,6 +89,7 @@ const updateStatus = {
 const launchedResult: ProxyLaunchResult = {
   launched: true,
   switchRequired: false,
+  restartRequired: false,
   version: "1.2.0",
   productName: "ChatGPT",
   runningVersions: [],
@@ -435,10 +439,8 @@ describe("Codex Windows 中文助手 shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "安装" }));
 
-    expect(await screen.findByRole("heading", { name: "正在连接 Microsoft Store" })).toBeVisible();
-    expect(
-      screen.getByText("正在解析官方桌面应用下载地址，首次安装可能需要几分钟。")
-    ).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "正在部署中文助手" })).toBeVisible();
+    expect(screen.getByText("正在写入启动器和配置。")).toBeVisible();
     expect(submittedRoot).toBe("D:\\Tools\\CodexPortable");
     expect(submittedDesktopShortcut).toBe(true);
     expect(submittedAssistantDesktopShortcut).toBe(true);
@@ -548,6 +550,50 @@ describe("Codex Windows 中文助手 shell", () => {
     });
   });
 
+  test("a launcher-only deploy hands over to the newly installed launcher", async () => {
+    let openedRoot: string | null = null;
+    let emitInstallEvent: ((event: InstallEvent) => void) | null = null;
+    const bridge = makeBridge({
+      installed: false,
+      openInstalledLauncher: async (root) => {
+        openedRoot = root;
+      },
+      launchInstalledCodex: async () => {
+        throw new Error("nothing was installed to launch");
+      },
+      onInstallEvent: (handler) => {
+        emitInstallEvent = handler;
+        return () => {};
+      }
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始安装" }));
+    fireEvent.click(screen.getByRole("button", { name: /便携模式/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.change(await screen.findByDisplayValue("D:\\Tools\\CodexPortable"), {
+      target: { value: "D:\\Apps\\CodexPortable" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "安装" }));
+
+    act(() => {
+      emitInstallEvent?.({
+        kind: "done",
+        title: "安装完成",
+        detail: "中文助手已就绪，可在工作台安装 ChatGPT 桌面应用。",
+        progress: 1,
+        version: null,
+        message: null
+      });
+    });
+
+    expect(await screen.findByText("中文助手已安装")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "打开中文助手" }));
+
+    expect(openedRoot).toBe("D:\\Apps\\CodexPortable");
+  });
+
   test("polls install status when install events are not delivered", async () => {
     const bridge = makeBridge({
       installed: false,
@@ -595,7 +641,7 @@ describe("Codex Windows 中文助手 shell", () => {
     expect(await screen.findByRole("heading", { name: "正在下载" })).toBeVisible();
     expect(screen.getByText("538 / 639 MB")).toBeVisible();
     expect(screen.getByText("84%")).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "正在连接 Microsoft Store" })).toBeNull();
+    expect(screen.queryByText("正在写入启动器和配置。")).toBeNull();
   });
 
   test("polled extract progress shows file count detail", async () => {
@@ -623,7 +669,7 @@ describe("Codex Windows 中文助手 shell", () => {
     expect(screen.getByText("35%")).toBeVisible();
   });
 
-  test("legacy blank progress does not keep the store connection title after bytes start", async () => {
+  test("blank progress keeps the deployment copy while the bar advances", async () => {
     const bridge = makeBridge({
       installed: false,
       getInstallStatus: async () => ({
@@ -643,8 +689,8 @@ describe("Codex Windows 中文助手 shell", () => {
     fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
     fireEvent.click(await screen.findByRole("button", { name: "安装" }));
 
-    expect(await screen.findByRole("heading", { name: "正在下载" })).toBeVisible();
-    expect(screen.getByText("正在下载官方桌面应用安装包。")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "正在部署中文助手" })).toBeVisible();
+    expect(screen.getByText("正在写入启动器和配置。")).toBeVisible();
     expect(screen.getByText("23%")).toBeVisible();
   });
 
@@ -911,6 +957,7 @@ describe("Codex Windows 中文助手 shell", () => {
         return {
           launched: true,
           switchRequired: false,
+          restartRequired: false,
           version: request?.version ?? "1.2.0",
           productName: request?.version === "1.0.0" ? "Codex" : "ChatGPT",
           runningVersions: [],
@@ -963,6 +1010,7 @@ describe("Codex Windows 中文助手 shell", () => {
           return {
             launched: false,
             switchRequired: true,
+            restartRequired: false,
             version: "1.0.0",
             productName: "Codex",
             runningVersions: ["1.2.0"],
@@ -972,6 +1020,7 @@ describe("Codex Windows 中文助手 shell", () => {
         return {
           launched: true,
           switchRequired: false,
+          restartRequired: false,
           version: "1.0.0",
           productName: "Codex",
           runningVersions: [],
@@ -1106,6 +1155,166 @@ describe("Codex Windows 中文助手 shell", () => {
 
     expect(screen.queryByRole("combobox", { name: "启动时检查更新频率" })).toBeNull();
     expect(screen.getByRole("group", { name: "启动时检查更新频率" })).toBeVisible();
+  });
+
+  test("proxy settings test unsaved values and never save them", async () => {
+    const tested: AppProxySettings[] = [];
+    const saved: AppProxySettings[] = [];
+    const bridge = makeBridge({
+      installed: true,
+      testAppProxyConnection: async (request) => {
+        tested.push(request);
+        return { outcome: "connectionRefused", message: "代理地址 127.0.0.1:7890 拒绝连接" };
+      },
+      saveAppProxySettings: async (request) => {
+        saved.push(request);
+        return { applied: true, message: "代理设置已保存，下次启动应用时生效", settings: request };
+      }
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    await screen.findByLabelText("应用代理");
+
+    fireEvent.click(screen.getByRole("button", { name: /Clash \/ Mihomo/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    });
+
+    expect(await screen.findByText("代理地址 127.0.0.1:7890 拒绝连接")).toBeVisible();
+    expect(tested).toEqual([
+      { ...defaultAppProxySettings, host: "127.0.0.1", port: 7890, type: "http" }
+    ]);
+    expect(saved).toEqual([]);
+  });
+
+  test("editing a proxy field clears the previous test result", async () => {
+    const bridge = makeBridge({
+      installed: true,
+      testAppProxyConnection: async () => ({
+        outcome: "success",
+        message: "已连接到 127.0.0.1:10808"
+      })
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    await screen.findByLabelText("应用代理");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    });
+    expect(await screen.findByText("已连接到 127.0.0.1:10808")).toBeVisible();
+
+    fireEvent.change(screen.getByRole("spinbutton", { name: "代理端口" }), {
+      target: { value: "7897" }
+    });
+    expect(screen.queryByText("已连接到 127.0.0.1:10808")).toBeNull();
+  });
+
+  test("a late proxy test cannot overwrite a newer probe result", async () => {
+    let resolveFirst!: (probe: AppProxyProbe) => void;
+    const testAppProxyConnection = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<AppProxyProbe>((resolve) => {
+            resolveFirst = resolve;
+          })
+      )
+      .mockResolvedValueOnce({ outcome: "success", message: "第二次检测成功" });
+    const bridge = makeBridge({ installed: true, testAppProxyConnection });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    await screen.findByLabelText("应用代理");
+
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    fireEvent.change(screen.getByRole("spinbutton", { name: "代理端口" }), {
+      target: { value: "7897" }
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    });
+    expect(await screen.findByText("第二次检测成功")).toBeVisible();
+
+    await act(async () => {
+      resolveFirst({ outcome: "timeout", message: "第一次检测超时" });
+    });
+    expect(screen.queryByText("第一次检测超时")).toBeNull();
+    expect(screen.getByText("第二次检测成功")).toBeVisible();
+  });
+
+  test("saving proxy settings is a separate action from testing the connection", async () => {
+    const saved: AppProxySettings[] = [];
+    const bridge = makeBridge({
+      installed: true,
+      saveAppProxySettings: async (request) => {
+        saved.push(request);
+        return { applied: true, message: "代理设置已保存，下次启动应用时生效", settings: request };
+      }
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: "设置" }));
+    await screen.findByLabelText("应用代理");
+
+    expect(screen.getByRole("button", { name: "保存应用代理设置" })).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText("启用应用代理"));
+    expect(screen.getByRole("button", { name: "保存应用代理设置" })).toBeEnabled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存应用代理设置" }));
+    });
+    expect(await screen.findByText("代理设置已保存，下次启动应用时生效")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "保存应用代理设置" })).toBeDisabled()
+    );
+    expect(saved).toEqual([{ ...defaultAppProxySettings, enabled: true }]);
+  });
+
+  test("an already running app requires confirmation before proxy arguments apply", async () => {
+    const launchRequests: LaunchRequest[] = [];
+    const bridge = makeBridge({
+      installed: true,
+      launchCodex: async (request) => {
+        if (request) {
+          launchRequests.push(request);
+        }
+        if (!request?.switchRunning) {
+          return {
+            launched: false,
+            switchRequired: false,
+            restartRequired: true,
+            version: "1.2.0",
+            productName: "ChatGPT",
+            runningVersions: ["1.2.0"],
+            message: "代理启动参数只会在应用第一次启动时生效。"
+          };
+        }
+        return { ...launchedResult, message: "已重启 ChatGPT 1.2.0" };
+      }
+    });
+
+    render(<App bridge={bridge} />);
+    fireEvent.click(await screen.findByRole("button", { name: /启动 ChatGPT/ }));
+
+    expect(await screen.findByText("需要重启应用")).toBeVisible();
+    expect(launchRequests).toEqual([{ version: null, switchRunning: false }]);
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByText("需要重启应用")).toBeNull();
+    expect(launchRequests).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /启动 ChatGPT/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "完全重启" }));
+    expect(await screen.findByText("已重启 ChatGPT 1.2.0")).toBeVisible();
+    expect(launchRequests).toEqual([
+      { version: null, switchRunning: false },
+      { version: null, switchRunning: false },
+      { version: "1.2.0", switchRunning: true }
+    ]);
   });
 
   test("settings keep an unsaved keep-all selection while inventory refreshes", async () => {
@@ -1369,7 +1578,55 @@ describe("Codex Windows 中文助手 shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "版本" }));
     expect(await screen.findByText("未找到可启动版本")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "概览" }));
-    expect(screen.getByRole("button", { name: "启动 ChatGPT" })).toBeDisabled();
+    expect(screen.getByRole("heading", { name: "尚未安装" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "安装桌面应用" })).toBeVisible();
+  });
+
+  test("workspace installs the desktop app when the launcher has none", async () => {
+    let startedUpdate = false;
+    const bridge = makeBridge({
+      installed: true,
+      getProxyLaunchStatus: async () => ({
+        managedInstall: true,
+        currentVersion: null,
+        knownLatest: null,
+        canLaunch: false,
+        codexExe: null,
+        productName: "ChatGPT",
+        runningVersions: [],
+        message: "尚未安装 ChatGPT 桌面应用"
+      }),
+      getVersionInventory: async () => ({
+        ...versionInventory,
+        defaultVersion: null,
+        versions: []
+      }),
+      checkUpdateStatus: async () => ({
+        kind: "skipped",
+        title: "尚未安装 ChatGPT",
+        message: "安装官方桌面应用后即可启动和检查更新。",
+        currentVersion: null,
+        latestVersion: null,
+        productName: "ChatGPT",
+        actions: []
+      }),
+      startUpdate: async () => {
+        startedUpdate = true;
+        return { accepted: true };
+      }
+    });
+
+    render(<App bridge={bridge} />);
+
+    expect(await screen.findByRole("heading", { name: "尚未安装" })).toBeVisible();
+    expect(screen.queryByLabelText("安装摘要")).toBeNull();
+    expect(screen.queryByRole("button", { name: "检查更新" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "安装桌面应用" }));
+
+    expect(startedUpdate).toBe(true);
+    expect(await screen.findByRole("heading", { name: "正在安装桌面应用" })).toBeVisible();
+    expect(screen.getByText("正在使用已配置的下载方式获取 ChatGPT 官方安装包。")).toBeVisible();
   });
 
   test("installed mode shows an up-to-date parity screen when no Codex update exists", async () => {
@@ -1949,6 +2206,23 @@ function makeBridge(
           },
     launchCodex: async () => launchedResult,
     launchInstalledCodex: async () => launchedResult,
+    openInstalledLauncher: async () => {},
+    getAppProxySettings: async () => ({
+      applied: true,
+      message: "",
+      settings: defaultAppProxySettings
+    }),
+    saveAppProxySettings: async (request) => ({
+      applied: true,
+      message: request.enabled
+        ? "代理设置已保存，下次启动应用时生效"
+        : "已关闭应用代理",
+      settings: request
+    }),
+    testAppProxyConnection: async () => ({
+      outcome: "success",
+      message: "已连接到 127.0.0.1:10808。这表示中文助手可以连接到这个本地端口，不代表远程节点或 ChatGPT 已经可用。"
+    }),
     getVersionInventory: async () => versionInventory,
     deleteInstalledVersion: async (version) => ({
       applied: true,

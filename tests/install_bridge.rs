@@ -124,6 +124,21 @@ fn install_done_does_not_assume_the_downloaded_product_name() {
 }
 
 #[test]
+fn launcher_only_deploy_reports_completion_without_a_product_version() {
+    let event = install_event_from_msg(InstallMsg::Done {
+        version: String::new(),
+    });
+
+    assert_eq!(event.kind, InstallEventKind::Done);
+    assert_eq!(event.title, "安装完成");
+    assert_eq!(
+        event.detail,
+        "中文助手已就绪，可在工作台安装 ChatGPT 桌面应用。"
+    );
+    assert!(event.version.is_none());
+}
+
+#[test]
 fn install_progress_event_keeps_download_title_and_size_detail() {
     let event = install_event_from_msg(InstallMsg::ProgressDetail {
         phase: "Downloading".into(),

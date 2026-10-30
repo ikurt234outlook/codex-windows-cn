@@ -1277,6 +1277,181 @@ a:focus-visible {
   margin-top: 4px;
 }
 
+.proxy-setting {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.proxy-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.proxy-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--console-soft);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.proxy-switch input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--console-mint);
+  cursor: pointer;
+}
+
+.proxy-switch input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.proxy-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) 108px;
+  align-items: end;
+  gap: 10px;
+}
+
+.proxy-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--console-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.proxy-field input,
+.proxy-field textarea {
+  width: 100%;
+  border: 1px solid var(--console-line-strong);
+  border-radius: 5px;
+  padding: 0 8px;
+  color: var(--console-text);
+  background: var(--console-surface-strong);
+  outline: none;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.proxy-field input {
+  height: 32px;
+}
+
+.proxy-field textarea {
+  padding: 7px 8px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.proxy-field input:focus,
+.proxy-field textarea:focus {
+  border-color: rgba(118, 220, 205, 0.55);
+}
+
+.proxy-field input:disabled,
+.proxy-field textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.proxy-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.proxy-presets button {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid var(--console-line-strong);
+  border-radius: 5px;
+  padding: 7px 9px;
+  color: var(--console-soft);
+  background: var(--console-surface);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.proxy-presets button small {
+  overflow: hidden;
+  color: var(--console-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-presets button:hover:not(:disabled) {
+  border-color: rgba(118, 220, 205, 0.4);
+}
+
+.proxy-presets button[aria-pressed="true"] {
+  border-color: var(--console-mint);
+  color: var(--console-text);
+}
+
+.proxy-presets button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.proxy-advanced {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--console-line);
+  padding-top: 10px;
+}
+
+.proxy-advanced-body {
+  display: grid;
+  gap: 10px;
+}
+
+.proxy-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--console-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.proxy-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--console-mint);
+  cursor: pointer;
+}
+
+.proxy-footer {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .proxy-fields {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .proxy-fields .segmented {
+    grid-column: 1 / -1;
+  }
+
+  .proxy-presets {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .maintenance-strip {
   display: grid;
   grid-template-columns: 1fr 1fr;

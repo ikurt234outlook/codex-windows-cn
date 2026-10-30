@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 pub enum Mode {
     Installer,
-    Proxy(Config),
+    /// Boxed so the installer variant does not carry `Config`'s size.
+    Proxy(Box<Config>),
 }
 
 /// The launcher's behavior is determined by whether a valid `updater.json`
@@ -28,7 +29,7 @@ pub fn detect() -> anyhow::Result<Mode> {
     // be frozen at install time) still pick up runtime state from the
     // per-user fallback file when present.
     match Config::load_runtime(&dir) {
-        Ok(cfg) => Ok(Mode::Proxy(cfg)),
+        Ok(cfg) => Ok(Mode::Proxy(Box::new(cfg))),
         Err(_) => Ok(Mode::Installer),
     }
 }

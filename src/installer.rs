@@ -236,6 +236,9 @@ fn update_inner(
     Ok(result.version)
 }
 
+/// Deploy the assistant into `root`: copy this executable, write the config,
+/// and run Windows integration. The ChatGPT desktop app is *not* downloaded
+/// here — the workspace installs and updates it on request.
 fn run_inner(
     opts: &InstallOptions,
     on_msg: &dyn Fn(InstallMsg),
@@ -245,104 +248,38 @@ fn run_inner(
     check_cancel(cancel)?;
     std::fs::create_dir_all(&opts.root)
         .with_context(|| format!("creating install root {}", opts.root.display()))?;
-    let downloads = opts.root.join("downloads");
-    std::fs::create_dir_all(&downloads)?;
 
-    // --- 1. Download --------------------------------------------------------
-    emit_progress_detail(
-        on_msg,
-        "Downloading",
-        &download_start_detail(opts.fetcher),
-        None,
-    );
-
-    let result = match opts.fetcher {
-        Fetcher::LocalFile => {
-            check_cancel(cancel)?;
-            let src = opts
-                .local_msix
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("LocalFile fetcher needs a file path"))?;
-            let on_msg_clone = BoxedFn(on_msg, cancel);
-            store::local_file::from_file(src, &downloads, &mut |done, total| {
-                on_msg_clone.progress_bytes(done, total)
-            })?
-        }
-        _ => {
-            check_cancel(cancel)?;
-            let on_msg_clone = BoxedFn(on_msg, cancel);
-            // See the note in `update_inner` for why we discard `_succeeded_via`.
-            let (r, _succeeded_via) = store::download_latest_with_fallback(
-                opts.fetcher,
-                store::PRODUCT_ID_CODEX,
-                &downloads,
-                &mut |done, total| on_msg_clone.progress_bytes(done, total),
-            )?;
-            r
-        }
-    };
-
-    // --- 2. Extract ---------------------------------------------------------
-    emit_progress_detail(
-        on_msg,
-        "Extracting",
-        &format!("正在准备解压 Codex {}。", result.version),
-        None,
-    );
-
-    check_cancel(cancel)?;
-    let on_msg_clone = BoxedFn(on_msg, cancel);
-    extract::extract_app(
-        &result.msix_path,
-        &opts.root,
-        &result.version,
-        &mut |done, total| on_msg_clone.progress_entries(done, total),
-    )?;
-
-    // --- 3. Place launcher stub --------------------------------------------
     emit_progress_detail(on_msg, "Finalizing", "正在写入启动器和配置。", None);
-
     check_cancel(cancel)?;
     place_launcher(&opts.root)?;
 
-    // --- 4. Write config ----------------------------------------------------
-    let cfg = Config {
-        install_mode: opts.mode,
-        current_version: result.version.clone(),
-        update_policy: UpdatePolicy::Always,
-        last_check_unix: None,
-        last_launcher_check_unix: None,
-        suppress_until_unix: None,
-        known_latest: Some(result.version.clone()),
-        skipped_version: None,
-        keep_versions: opts.keep_versions.max(1),
-        keep_all_versions: opts.keep_all_versions,
-        fetcher: match opts.fetcher {
-            Fetcher::LocalFile => Fetcher::Direct, // don't persist LocalFile
-            f => f,
-        },
-        use_current_junction: opts.use_current_junction,
-        register_uninstall: opts.register_uninstall,
-        known_latest_launcher: None,
-        skipped_launcher_version: None,
-        launcher_suppress_until_unix: None,
+    // Deploying over an existing install keeps the Codex version and the
+    // per-user settings already recorded there instead of forgetting them.
+    let mut cfg = Config::load(&opts.root.join(crate::config::CONFIG_FILENAME))
+        .unwrap_or_else(|_| fresh_install_config(opts));
+    cfg.install_mode = opts.mode;
+    cfg.keep_versions = opts.keep_versions.max(1);
+    cfg.keep_all_versions = opts.keep_all_versions;
+    cfg.fetcher = match opts.fetcher {
+        Fetcher::LocalFile => Fetcher::Direct, // don't persist LocalFile
+        f => f,
     };
+    cfg.use_current_junction = opts.use_current_junction;
+    cfg.register_uninstall = opts.register_uninstall;
+
     // Initial install runs elevated for System mode, so install-root
     // write always succeeds. save_install also clears any stale state
     // overlay from a previous install at this same root.
     check_cancel(cancel)?;
     cfg.save_install(&opts.root)?;
 
-    // --- 5. Best-effort Windows integration + cleanup -----------------------
-    //
-    // At this point the install is usable: Codex is extracted, the launcher is
-    // in place, and updater.json is written. Junctions, shortcuts, registry
-    // metadata, pruning, and MSIX cleanup are useful polish, but should not be
-    // allowed to keep the UI stuck on the final progress screen if Windows
-    // shell integration or antivirus is slow.
+    // At this point the assistant is usable: the launcher is in place and
+    // updater.json is written. Junctions, shortcuts and registry metadata are
+    // useful polish, but should not keep the UI stuck on the final screen if
+    // Windows shell integration or antivirus is slow.
     let post_install = PostInstallWork {
         root: opts.root.clone(),
-        version: result.version.clone(),
+        version: cfg.current_version.clone(),
         mode: opts.mode,
         create_shortcut: opts.create_shortcut,
         create_desktop_shortcut: opts.create_desktop_shortcut,
@@ -351,7 +288,6 @@ fn run_inner(
         keep_versions: cfg.keep_versions,
         keep_all_versions: cfg.keep_all_versions,
         use_current_junction: cfg.use_current_junction,
-        msix_path: result.msix_path.clone(),
     };
     match post_work_mode {
         PostWorkMode::Background => {
@@ -360,11 +296,34 @@ fn run_inner(
         PostWorkMode::Inline => run_post_install_work(post_install),
     }
 
-    Ok(result.version)
+    Ok(cfg.current_version)
+}
+
+fn fresh_install_config(opts: &InstallOptions) -> Config {
+    Config {
+        install_mode: opts.mode,
+        current_version: String::new(),
+        update_policy: UpdatePolicy::Always,
+        last_check_unix: None,
+        last_launcher_check_unix: None,
+        suppress_until_unix: None,
+        known_latest: None,
+        skipped_version: None,
+        keep_versions: opts.keep_versions.max(1),
+        keep_all_versions: opts.keep_all_versions,
+        fetcher: Fetcher::Direct,
+        use_current_junction: opts.use_current_junction,
+        register_uninstall: opts.register_uninstall,
+        known_latest_launcher: None,
+        skipped_launcher_version: None,
+        launcher_suppress_until_unix: None,
+        app_proxy: Default::default(),
+    }
 }
 
 struct PostInstallWork {
     root: PathBuf,
+    /// Empty when no ChatGPT version is installed yet.
     version: String,
     mode: InstallMode,
     create_shortcut: bool,
@@ -374,11 +333,11 @@ struct PostInstallWork {
     keep_versions: u32,
     keep_all_versions: bool,
     use_current_junction: bool,
-    msix_path: PathBuf,
 }
 
 fn run_post_install_work(work: PostInstallWork) {
-    if work.use_current_junction {
+    let has_version = !work.version.is_empty();
+    if work.use_current_junction && has_version {
         if let Err(e) = junction::set_current(&work.root, &work.version) {
             eprintln!("warn: couldn't set versions/current junction: {e:#}");
         }
@@ -410,12 +369,18 @@ fn run_post_install_work(work: PostInstallWork) {
         }
     }
     if work.register_uninstall {
-        if let Err(e) = write_registry(&work.root, work.mode, &work.version) {
+        // The uninstall entry describes the assistant itself, so it reports the
+        // assistant version until a ChatGPT version is installed.
+        let display_version = if has_version {
+            work.version.as_str()
+        } else {
+            env!("CARGO_PKG_VERSION")
+        };
+        if let Err(e) = write_registry(&work.root, work.mode, display_version) {
             eprintln!("warn: registry uninstall entry: {e:#}");
         }
     }
     prune_versions(&work.root, work.keep_versions, work.keep_all_versions);
-    let _ = std::fs::remove_file(&work.msix_path);
 }
 
 struct PostUpdateWork {
