@@ -857,7 +857,7 @@ fn claim_single_instance_or_focus_existing() -> Option<SingleInstanceGuard> {
         CreateMutexW(
             None,
             true,
-            w!("Local\\io.github.chrichuang218.codex-windows-cn.launcher"),
+            w!("Local\\io.github.ikurt234outlook.codex-windows-cn.launcher"),
         )
     };
     let Ok(mutex) = mutex else {

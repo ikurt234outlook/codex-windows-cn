@@ -22,7 +22,7 @@ cargo build
 | 代理启动 | `tests/proxy_bridge.rs` 覆盖可启动路径和无 `Codex.exe` 的中文失败状态；React 测试覆盖启动按钮和启动结果。 |
 | 检查更新/更新 | `tests/update_bridge.rs` 覆盖更新状态、延后/跳过动作和更新事件中文化；React 测试覆盖立即更新、稍后、跳过、关闭提醒和完成事件。 |
 | 卸载 | `tests/uninstall_bridge.rs` 覆盖卸载确认、安装签名安全阻断和卸载事件中文化；React 测试覆盖删除/保留清单、确认卸载和完成事件。 |
-| 自更新 | `tests/launcher_update_bridge.rs` 覆盖 `chrichuang218/codex-windows-cn` release 源、自更新状态、提醒动作和下载/校验/替换事件中文化；React 测试覆盖发布页入口、应用更新和完成事件。 |
+| 自更新 | `tests/launcher_update_bridge.rs` 覆盖 `ikurt234outlook/codex-windows-cn` release 源、自更新状态、提醒动作和下载/校验/替换事件中文化；React 测试覆盖发布页入口、应用更新和完成事件。 |
 
 ## 发布产物
 

@@ -153,7 +153,7 @@ const launcherUpdateStatus = {
   message: "当前版本 0.1.2，可更新到 0.2.0",
   currentVersion: "0.1.2",
   latestVersion: "0.2.0",
-  releaseUrl: "https://github.com/chrichuang218/codex-windows-cn/releases/tag/v0.2.0",
+  releaseUrl: "https://github.com/ikurt234outlook/codex-windows-cn/releases/tag/v0.2.0",
   actions: [
     "updateNow" as const,
     "viewRelease" as const,
@@ -1934,7 +1934,7 @@ describe("Codex Windows 中文助手 shell", () => {
     expect(await screen.findByText("发现启动器新版本")).toBeVisible();
     expect(screen.getByRole("link", { name: "查看发布页" })).toHaveAttribute(
       "href",
-      "https://github.com/chrichuang218/codex-windows-cn/releases/tag/v0.2.0"
+      "https://github.com/ikurt234outlook/codex-windows-cn/releases/tag/v0.2.0"
     );
 
     fireEvent.click(screen.getByRole("button", { name: "应用更新" }));

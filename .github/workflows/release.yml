@@ -70,7 +70,7 @@ jobs:
           $notes = @'
           # Codex Windows 中文助手 __TAG__
 
-          本发布来自 `chrichuang218/codex-windows-cn`。这是社区开源的中文安装更新助手，不是 OpenAI 官方项目，也不修改、不重新分发 Codex 本体。
+          本发布来自 `ikurt234outlook/codex-windows-cn`。这是社区开源的中文安装更新助手，不是 OpenAI 官方项目，也不修改、不重新分发 Codex 本体。
 
           ## 更新内容
 
@@ -99,7 +99,7 @@ jobs:
           本 release 由 GitHub Actions 从 tag `__TAG__`（commit `__SHA__`）构建。
 
           ~~~powershell
-          gh attestation verify codex-launcher.exe --owner chrichuang218
+          gh attestation verify codex-launcher.exe --owner ikurt234outlook
           ~~~
 
           校验通过只能证明你拿到的是本仓库对应构建产物，不能表示它是 OpenAI 官方发布物。

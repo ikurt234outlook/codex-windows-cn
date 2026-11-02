@@ -658,7 +658,7 @@ fn write_registry(root: &Path, mode: InstallMode, version: &str) -> Result<()> {
     let entry = registry::UninstallEntry {
         display_name: "Codex Windows 中文助手",
         display_version: version,
-        publisher: "chrichuang218",
+        publisher: "ikurt234outlook",
         install_location: root,
         uninstall_string: format!("\"{}\" --uninstall", launcher.display()),
         display_icon: &launcher,

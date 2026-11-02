@@ -12,14 +12,14 @@ use codex_windows_cn::updater::{
 
 #[test]
 fn launcher_release_source_uses_this_project_repository() {
-    assert_eq!(LAUNCHER_REPO, "chrichuang218/codex-windows-cn");
+    assert_eq!(LAUNCHER_REPO, "ikurt234outlook/codex-windows-cn");
     assert_eq!(
         LAUNCHER_LATEST_RELEASE_URL,
-        "https://github.com/chrichuang218/codex-windows-cn/releases/latest"
+        "https://github.com/ikurt234outlook/codex-windows-cn/releases/latest"
     );
     assert_eq!(
         LAUNCHER_LATEST_API,
-        "https://api.github.com/repos/chrichuang218/codex-windows-cn/releases/latest"
+        "https://api.github.com/repos/ikurt234outlook/codex-windows-cn/releases/latest"
     );
 }
 
@@ -45,7 +45,8 @@ fn launcher_update_available_decision_becomes_chinese_status_with_actions() {
     let status = launcher_update_status_from_decision(LauncherDecision::Available {
         current: "0.1.2".into(),
         latest: "0.2.0".into(),
-        release_url: "https://github.com/chrichuang218/codex-windows-cn/releases/tag/v0.2.0".into(),
+        release_url: "https://github.com/ikurt234outlook/codex-windows-cn/releases/tag/v0.2.0"
+            .into(),
     });
 
     assert_eq!(status.kind, LauncherUpdateStatusKind::Available);
@@ -55,7 +56,7 @@ fn launcher_update_available_decision_becomes_chinese_status_with_actions() {
     assert_eq!(status.latest_version.as_deref(), Some("0.2.0"));
     assert_eq!(
         status.release_url.as_deref(),
-        Some("https://github.com/chrichuang218/codex-windows-cn/releases/tag/v0.2.0")
+        Some("https://github.com/ikurt234outlook/codex-windows-cn/releases/tag/v0.2.0")
     );
     assert_eq!(
         status.actions,
@@ -74,7 +75,7 @@ fn launcher_update_available_decision_becomes_chinese_status_with_actions() {
 #[test]
 fn launcher_rate_limit_error_becomes_short_chinese_status() {
     let status = launcher_update_status_from_decision(LauncherDecision::Error(
-        "HTTP status client error (403 rate limit exceeded) for url (https://api.github.com/repos/chrichuang218/codex-windows-cn/releases/latest)".into(),
+        "HTTP status client error (403 rate limit exceeded) for url (https://api.github.com/repos/ikurt234outlook/codex-windows-cn/releases/latest)".into(),
     ));
 
     assert_eq!(status.kind, LauncherUpdateStatusKind::Error);

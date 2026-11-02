@@ -21,11 +21,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Owner/repo for the launcher's own GitHub releases. Tweak here if the
 /// project ever moves.
-pub const LAUNCHER_REPO: &str = "chrichuang218/codex-windows-cn";
+pub const LAUNCHER_REPO: &str = "ikurt234outlook/codex-windows-cn";
 pub const LAUNCHER_LATEST_RELEASE_URL: &str =
-    "https://github.com/chrichuang218/codex-windows-cn/releases/latest";
+    "https://github.com/ikurt234outlook/codex-windows-cn/releases/latest";
 pub const LAUNCHER_LATEST_API: &str =
-    "https://api.github.com/repos/chrichuang218/codex-windows-cn/releases/latest";
+    "https://api.github.com/repos/ikurt234outlook/codex-windows-cn/releases/latest";
 
 #[derive(Debug, Clone)]
 pub enum UpdateDecision {
@@ -543,14 +543,14 @@ mod tests {
     fn latest_release_redirect_location_yields_tag() {
         assert_eq!(
             tag_from_latest_release_location(
-                "https://github.com/chrichuang218/codex-windows-cn/releases/tag/v0.2.0"
+                "https://github.com/ikurt234outlook/codex-windows-cn/releases/tag/v0.2.0"
             )
             .as_deref(),
             Some("v0.2.0")
         );
         assert_eq!(
             tag_from_latest_release_location(
-                "/chrichuang218/codex-windows-cn/releases/tag/v0.2.1?expanded=true"
+                "/ikurt234outlook/codex-windows-cn/releases/tag/v0.2.1?expanded=true"
             )
             .as_deref(),
             Some("v0.2.1")

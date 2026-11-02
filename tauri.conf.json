@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Codex Windows 中文助手",
-  "version": "0.1.22",
-  "identifier": "io.github.chrichuang218.codex-windows-cn",
+  "version": "0.2.0",
+  "identifier": "io.github.ikurt234outlook.codex-windows-cn",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",

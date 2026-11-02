@@ -78,7 +78,7 @@ tag 使用 `vX.Y.Z`，例如 `v0.1.4`。
 启动器检查自身更新时优先使用 GitHub Releases 重定向：
 
 ```text
-https://github.com/chrichuang218/codex-windows-cn/releases/latest
+https://github.com/ikurt234outlook/codex-windows-cn/releases/latest
 ```
 
 只有重定向路径失败时才回退到 GitHub API，避免未认证 API 限流。

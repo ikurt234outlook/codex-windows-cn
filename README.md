@@ -1,8 +1,8 @@
 # Codex Windows 中文助手
 
-[![Release](https://img.shields.io/github/v/release/chrichuang218/codex-windows-cn?display_name=tag&style=flat-square)](https://github.com/chrichuang218/codex-windows-cn/releases/latest)
-[![CI](https://img.shields.io/github/actions/workflow/status/chrichuang218/codex-windows-cn/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/chrichuang218/codex-windows-cn/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/chrichuang218/codex-windows-cn?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/ikurt234outlook/codex-windows-cn?display_name=tag&style=flat-square)](https://github.com/ikurt234outlook/codex-windows-cn/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/ikurt234outlook/codex-windows-cn/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/ikurt234outlook/codex-windows-cn/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/ikurt234outlook/codex-windows-cn?style=flat-square)](LICENSE)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square)](https://www.microsoft.com/windows)
 
 面向中文 Windows 用户的 **中文安装更新助手**，用于安装、启动和维护官方 Microsoft Store 桌面应用，并在本机管理保留下来的 Codex / ChatGPT 历史版本。
@@ -43,7 +43,7 @@
 
 ## 快速开始
 
-1. 从 [最新 Release](https://github.com/chrichuang218/codex-windows-cn/releases/latest) 下载 `codex-launcher.exe` 和 `codex-launcher.exe.sha256`。
+1. 从 [最新 Release](https://github.com/ikurt234outlook/codex-windows-cn/releases/latest) 下载 `codex-launcher.exe` 和 `codex-launcher.exe.sha256`。
 2. 按下方方式校验 SHA256。
 3. 运行 `codex-launcher.exe`，选择安装位置和保留策略；这一步只部署中文助手，不会下载桌面应用。
 4. 在工作台概览点「安装桌面应用」，完成后从概览启动最新版本，或在版本页启动保留的历史版本。
@@ -70,7 +70,7 @@ v1 只稳定交付以下五条主路径，不扩展为诊断平台、代理配�
 | 代理启动 | 解析最新或用户指定的本地版本，根据包内容启动 Codex / ChatGPT，并维护 `versions/current` 稳定入口；可选启用应用代理（见下节）。 |
 | 检查更新/更新 | 检查 Microsoft Store 最新版本，支持立即更新、稍后提醒、跳过版本和关闭提醒。 |
 | 卸载 | 明确展示删除与保留内容，只删除启动器管理的版本、缓存、配置、快捷方式和卸载入口。 |
-| 自更新 | 检查 `chrichuang218/codex-windows-cn` 的 GitHub Release，下载、校验、自检并替换启动器。 |
+| 自更新 | 检查 `ikurt234outlook/codex-windows-cn` 的 GitHub Release，下载、校验、自检并替换启动器。 |
 
 ## 应用代理
 
@@ -89,8 +89,8 @@ v1 只稳定交付以下五条主路径，不扩展为诊断平台、代理配�
 
 固定下载地址：
 
-- `codex-launcher.exe`：<https://github.com/chrichuang218/codex-windows-cn/releases/latest/download/codex-launcher.exe>
-- `codex-launcher.exe.sha256`：<https://github.com/chrichuang218/codex-windows-cn/releases/latest/download/codex-launcher.exe.sha256>
+- `codex-launcher.exe`：<https://github.com/ikurt234outlook/codex-windows-cn/releases/latest/download/codex-launcher.exe>
+- `codex-launcher.exe.sha256`：<https://github.com/ikurt234outlook/codex-windows-cn/releases/latest/download/codex-launcher.exe.sha256>
 
 SHA256 完整性校验：
 
@@ -102,7 +102,7 @@ Get-Content .\codex-launcher.exe.sha256
 构建来源验证：
 
 ```powershell
-gh attestation verify codex-launcher.exe --owner chrichuang218
+gh attestation verify codex-launcher.exe --owner ikurt234outlook
 ```
 
 Release 产物由 GitHub Actions 构建，并同时发布 SHA256 文件。校验通过只能证明文件来自本仓库对应构建，不能表示它是 OpenAI 官方发布物。

@@ -28,11 +28,11 @@ fn release_workflow_publishes_expected_artifacts_and_trust_text() {
         "dist/codex-launcher.exe.sha256",
         "body_path: release-notes.md",
         "## 更新内容",
-        "gh attestation verify codex-launcher.exe --owner chrichuang218",
+        "gh attestation verify codex-launcher.exe --owner ikurt234outlook",
         "不是 OpenAI 官方项目",
         "SHA256",
         "GitHub Actions",
-        "chrichuang218/codex-windows-cn",
+        "ikurt234outlook/codex-windows-cn",
     ] {
         assert!(
             release.contains(required),
